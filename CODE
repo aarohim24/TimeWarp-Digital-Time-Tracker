@@ -1,0 +1,104 @@
+Main.py
+import time
+from tracker.activity_tracker import track_active_window
+from tracker.categorizer import categorize
+from ui.dashboard import show_dashboard
+import sqlite3
+from datetime import datetime
+
+DB_PATH = "data/activity.db"
+
+def save_activity(timestamp, app, title, category):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS activity (
+            timestamp TEXT,
+            app TEXT,
+            title TEXT,
+            category TEXT
+        )
+    ''')
+    cursor.execute('''
+        INSERT INTO activity (timestamp, app, title, category)
+        VALUES (?, ?, ?, ?)''', (timestamp, app, title, category))
+    conn.commit()
+    conn.close()
+
+if __name__ == "__main__":
+    print("[TimeWarp] Starting time audit...")
+    try:
+        while True:
+            title, app = track_active_window()
+            if title and app:
+                category = categorize(app, title)
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                print(f"[{category}] {app} - {title}")
+                save_activity(timestamp, app, title, category)
+            time.sleep(10)
+    except KeyboardInterrupt:
+        print("\n[TimeWarp] Audit stopped. Launching dashboard...")
+        show_dashboard(DB_PATH)
+
+Create `tracker/activity_tracker.py`
+import subprocess
+
+def track_active_window():
+    try:
+        win_id = subprocess.check_output(['xdotool', 'getwindowfocus']).strip()
+        win_name = subprocess.check_output(['xdotool', 'getwindowname', win_id]).decode("utf-8").strip()
+        return win_name, "Linux App"
+    except Exception:
+        return None, None
+```
+
+Create `tracker/categorizer.py`
+def categorize(app, title):
+    app = app.lower()
+    title = title.lower()
+
+    rules = {
+        "work": ["code", "vscode", "pycharm", "github", "notion"],
+        "social": ["discord", "instagram", "whatsapp", "twitter"],
+        "entertainment": ["youtube", "netflix", "spotify"],
+        "browsing": ["chrome", "firefox", "edge", "safari"],
+        "writing": ["word", "notepad", "docs"],
+    }
+
+    for category, keywords in rules.items():
+        if any(kw in app or kw in title for kw in keywords):
+            return category
+
+    return "other"
+
+```
+
+---
+Create `ui/dashboard.py`
+import sqlite3
+import pandas as pd
+import matplotlib.pyplot as plt
+
+def show_dashboard(db_path):
+    conn = sqlite3.connect(db_path)
+    df = pd.read_sql_query("SELECT * FROM activity", conn)
+    conn.close()
+
+    if df.empty:
+        print("No activity data to show.")
+        return
+
+    df['timestamp'] = pd.to_datetime(df['timestamp'])
+    df['hour'] = df['timestamp'].dt.hour
+
+    category_counts = df['category'].value_counts()
+    hourly_counts = df.groupby('hour').size()
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    category_counts.plot(kind='bar', ax=axes[0], title="Activity by Category")
+    hourly_counts.plot(kind='line', ax=axes[1], title="Activity by Hour")
+
+    plt.tight_layout()
+    plt.show()
+```
+
