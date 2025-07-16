@@ -1,0 +1,133 @@
+# package.json
+{
+  "name": "timewarp-app",
+  "version": "1.0.0",
+  "description": "A modern time tracking web application",
+  "main": "index.js",
+  "scripts": {
+    "build": "react-scripts build",
+    "start": "react-scripts start",
+    "test": "react-scripts test",
+    "eject": "react-scripts eject"
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-scripts": "5.0.1",
+    "recharts": "^2.8.0",
+    "lucide-react": "^0.263.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0"
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  }
+}
+
+# netlify.toml
+[build]
+  publish = "build"
+  command = "npm run build"
+  functions = "netlify/functions"
+
+[build.environment]
+  NODE_VERSION = "18"
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+
+# requirements.txt (for Python functions)
+# Place this in netlify/functions/requirements.txt
+sqlite3
+
+# .env.example
+REACT_APP_API_BASE_URL=/.netlify/functions
+NODE_ENV=production
+
+# public/index.html
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="icon" href="%PUBLIC_URL%/favicon.ico" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#000000" />
+    <meta name="description" content="TimeWarp - Modern Time Tracking Application" />
+    <link rel="apple-touch-icon" href="%PUBLIC_URL%/logo192.png" />
+    <link rel="manifest" href="%PUBLIC_URL%/manifest.json" />
+    <title>TimeWarp - Time Tracking</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+  </head>
+  <body>
+    <noscript>You need to enable JavaScript to run this app.</noscript>
+    <div id="root"></div>
+  </body>
+</html>
+
+# src/index.js
+import React from 'react';
+import ReactDOM from 'react-dom/client';
+import './index.css';
+import TimeWarp from './App';
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(
+  <React.StrictMode>
+    <TimeWarp />
+  </React.StrictMode>
+);
+
+# src/index.css
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+code {
+  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
+    monospace;
+}
+
+# Directory structure needed:
+# project-root/
+# ├── public/
+# │   ├── index.html
+# │   └── favicon.ico
+# ├── src/
+# │   ├── App.js (your React component)
+# │   ├── index.js
+# │   └── index.css
+# ├── netlify/
+# │   └── functions/
+# │       ├── activity.py
+# │       ├── analytics.py
+# │       ├── categorize.py
+# │       └── requirements.txt
+# ├── package.json
+# ├── netlify.toml
+# └── README.md
