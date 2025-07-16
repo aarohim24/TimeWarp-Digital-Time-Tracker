@@ -1,0 +1,512 @@
+// manifest.json
+{
+  "manifest_version": 3,
+  "name": "TimeWarp Tracker",
+  "version": "1.0",
+  "description": "Automatic time tracking for TimeWarp application",
+  "permissions": [
+    "activeTab",
+    "tabs",
+    "storage",
+    "alarms"
+  ],
+  "host_permissions": [
+    "http://localhost:3000/*",
+    "https://your-netlify-app.netlify.app/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"]
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "TimeWarp Tracker"
+  },
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  }
+}
+
+// background.js
+class TimeWarpTracker {
+  constructor() {
+    this.currentTab = null;
+    this.startTime = null;
+    this.isTracking = false;
+    this.apiBase = 'https://your-netlify-app.netlify.app/.netlify/functions';
+    
+    this.init();
+  }
+  
+  init() {
+    // Listen for tab changes
+    chrome.tabs.onActivated.addListener((activeInfo) => {
+      this.handleTabChange(activeInfo.tabId);
+    });
+    
+    // Listen for tab updates (URL changes)
+    chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+      if (changeInfo.status === 'complete') {
+        this.handleTabChange(tabId);
+      }
+    });
+    
+    // Create alarm for periodic tracking
+    chrome.alarms.create('trackingAlarm', { periodInMinutes: 0.1 }); // Every 6 seconds
+    
+    chrome.alarms.onAlarm.addListener((alarm) => {
+      if (alarm.name === 'trackingAlarm') {
+        this.trackCurrentActivity();
+      }
+    });
+    
+    // Listen for storage changes
+    chrome.storage.onChanged.addListener((changes, namespace) => {
+      if (changes.isTracking) {
+        this.isTracking = changes.isTracking.newValue;
+      }
+    });
+    
+    // Initialize tracking state
+    chrome.storage.local.get(['isTracking'], (result) => {
+      this.isTracking = result.isTracking || false;
+    });
+  }
+  
+  async handleTabChange(tabId) {
+    if (!this.isTracking) return;
+    
+    // Save previous activity if exists
+    if (this.currentTab && this.startTime) {
+      await this.saveActivity();
+    }
+    
+    // Get new tab info
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      this.currentTab = tab;
+      this.startTime = Date.now();
+    } catch (error) {
+      console.error('Error getting tab info:', error);
+    }
+  }
+  
+  async trackCurrentActivity() {
+    if (!this.isTracking || !this.currentTab) return;
+    
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (tab && tab.id !== this.currentTab.id) {
+        await this.handleTabChange(tab.id);
+      }
+    } catch (error) {
+      console.error('Error tracking activity:', error);
+    }
+  }
+  
+  async saveActivity() {
+    if (!this.currentTab || !this.startTime) return;
+    
+    const duration = Math.floor((Date.now() - this.startTime) / 1000);
+    if (duration < 5) return; // Skip very short activities
+    
+    const activityData = {
+      app: this.extractAppName(this.currentTab.url),
+      title: this.currentTab.title || 'Unknown',
+      duration: duration,
+      timestamp: new Date().toISOString()
+    };
+    
+    try {
+      // Get category
+      const categoryResponse = await fetch(`${this.apiBase}/categorize`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          app: activityData.app,
+          title: activityData.title
+        })
+      });
+      const categoryData = await categoryResponse.json();
+      activityData.category = categoryData.category;
+      
+      // Save activity
+      await fetch(`${this.apiBase}/activity`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(activityData)
+      });
+      
+      console.log('Activity saved:', activityData);
+    } catch (error) {
+      console.error('Error saving activity:', error);
+    }
+  }
+  
+  extractAppName(url) {
+    try {
+      const domain = new URL(url).hostname;
+      return domain.replace('www.', '').split('.')[0];
+    } catch {
+      return 'Browser';
+    }
+  }
+  
+  async startTracking() {
+    this.isTracking = true;
+    await chrome.storage.local.set({ isTracking: true });
+    
+    // Get current tab
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab) {
+      this.currentTab = tab;
+      this.startTime = Date.now();
+    }
+  }
+  
+  async stopTracking() {
+    if (this.currentTab && this.startTime) {
+      await this.saveActivity();
+    }
+    
+    this.isTracking = false;
+    this.currentTab = null;
+    this.startTime = null;
+    await chrome.storage.local.set({ isTracking: false });
+  }
+}
+
+// Initialize the tracker
+const tracker = new TimeWarpTracker();
+
+// Handle messages from popup
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  switch (request.action) {
+    case 'startTracking':
+      tracker.startTracking();
+      sendResponse({ success: true });
+      break;
+    case 'stopTracking':
+      tracker.stopTracking();
+      sendResponse({ success: true });
+      break;
+    case 'getStatus':
+      sendResponse({ isTracking: tracker.isTracking });
+      break;
+  }
+});
+
+// content.js
+// Monitor page interactions and send data to background script
+class PageTracker {
+  constructor() {
+    this.lastActivity = Date.now();
+    this.isActive = true;
+    
+    this.init();
+  }
+  
+  init() {
+    // Track user interactions
+    ['click', 'scroll', 'keypress', 'mousemove'].forEach(event => {
+      document.addEventListener(event, () => {
+        this.lastActivity = Date.now();
+        this.isActive = true;
+      });
+    });
+    
+    // Detect idle state
+    setInterval(() => {
+      if (Date.now() - this.lastActivity > 60000) { // 1 minute idle
+        this.isActive = false;
+      }
+    }, 10000);
+    
+    // Send page data to background
+    this.sendPageData();
+  }
+  
+  sendPageData() {
+    const pageData = {
+      title: document.title,
+      url: window.location.href,
+      domain: window.location.hostname,
+      timestamp: new Date().toISOString()
+    };
+    
+    chrome.runtime.sendMessage({
+      action: 'pageData',
+      data: pageData
+    });
+  }
+}
+
+// Initialize page tracker
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => new PageTracker());
+} else {
+  new PageTracker();
+}
+
+// popup.html
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body {
+      width: 300px;
+      padding: 20px;
+      font-family: Arial, sans-serif;
+    }
+    
+    .header {
+      display: flex;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+    
+    .logo {
+      width: 24px;
+      height: 24px;
+      margin-right: 10px;
+    }
+    
+    .title {
+      font-size: 18px;
+      font-weight: bold;
+      color: #333;
+    }
+    
+    .status {
+      display: flex;
+      align-items: center;
+      margin-bottom: 15px;
+    }
+    
+    .status-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      margin-right: 10px;
+    }
+    
+    .status-dot.active {
+      background-color: #4CAF50;
+    }
+    
+    .status-dot.inactive {
+      background-color: #f44336;
+    }
+    
+    .controls {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+    
+    button {
+      flex: 1;
+      padding: 10px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-weight: bold;
+    }
+    
+    .start-btn {
+      background-color: #4CAF50;
+      color: white;
+    }
+    
+    .stop-btn {
+      background-color: #f44336;
+      color: white;
+    }
+    
+    .start-btn:hover {
+      background-color: #45a049;
+    }
+    
+    .stop-btn:hover {
+      background-color: #da190b;
+    }
+    
+    .stats {
+      background-color: #f5f5f5;
+      padding: 15px;
+      border-radius: 4px;
+    }
+    
+    .stat-item {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 5px;
+    }
+    
+    .link {
+      margin-top: 15px;
+      text-align: center;
+    }
+    
+    .link a {
+      color: #2196F3;
+      text-decoration: none;
+    }
+    
+    .link a:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="logo">⏰</div>
+    <div class="title">TimeWarp Tracker</div>
+  </div>
+  
+  <div class="status">
+    <div class="status-dot" id="statusDot"></div>
+    <span id="statusText">Checking...</span>
+  </div>
+  
+  <div class="controls">
+    <button id="startBtn" class="start-btn">Start Tracking</button>
+    <button id="stopBtn" class="stop-btn">Stop Tracking</button>
+  </div>
+  
+  <div class="stats">
+    <div class="stat-item">
+      <span>Current Page:</span>
+      <span id="currentPage">-</span>
+    </div>
+    <div class="stat-item">
+      <span>Time on Page:</span>
+      <span id="timeOnPage">-</span>
+    </div>
+  </div>
+  
+  <div class="link">
+    <a href="https://your-netlify-app.netlify.app" target="_blank">Open Dashboard</a>
+  </div>
+  
+  <script src="popup.js"></script>
+</body>
+</html>
+
+// popup.js
+class PopupManager {
+  constructor() {
+    this.isTracking = false;
+    this.startTime = null;
+    
+    this.init();
+  }
+  
+  init() {
+    // Get DOM elements
+    this.statusDot = document.getElementById('statusDot');
+    this.statusText = document.getElementById('statusText');
+    this.startBtn = document.getElementById('startBtn');
+    this.stopBtn = document.getElementById('stopBtn');
+    this.currentPage = document.getElementById('currentPage');
+    this.timeOnPage = document.getElementById('timeOnPage');
+    
+    // Add event listeners
+    this.startBtn.addEventListener('click', () => this.startTracking());
+    this.stopBtn.addEventListener('click', () => this.stopTracking());
+    
+    // Initialize UI
+    this.updateUI();
+    this.updateCurrentPage();
+    
+    // Update time periodically
+    setInterval(() => this.updateTime(), 1000);
+  }
+  
+  async updateUI() {
+    try {
+      const response = await chrome.runtime.sendMessage({ action: 'getStatus' });
+      this.isTracking = response.isTracking;
+      
+      if (this.isTracking) {
+        this.statusDot.className = 'status-dot active';
+        this.statusText.textContent = 'Tracking Active';
+        this.startBtn.disabled = true;
+        this.stopBtn.disabled = false;
+      } else {
+        this.statusDot.className = 'status-dot inactive';
+        this.statusText.textContent = 'Tracking Stopped';
+        this.startBtn.disabled = false;
+        this.stopBtn.disabled = true;
+      }
+    } catch (error) {
+      console.error('Error updating UI:', error);
+    }
+  }
+  
+  async updateCurrentPage() {
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (tab) {
+        const domain = new URL(tab.url).hostname;
+        this.currentPage.textContent = domain;
+      }
+    } catch (error) {
+      console.error('Error getting current page:', error);
+    }
+  }
+  
+  updateTime() {
+    if (this.isTracking && this.startTime) {
+      const elapsed = Math.floor((Date.now() - this.startTime) / 1000);
+      const minutes = Math.floor(elapsed / 60);
+      const seconds = elapsed % 60;
+      this.timeOnPage.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+    }
+  }
+  
+  async startTracking() {
+    try {
+      await chrome.runtime.sendMessage({ action: 'startTracking' });
+      this.startTime = Date.now();
+      this.updateUI();
+    } catch (error) {
+      console.error('Error starting tracking:', error);
+    }
+  }
+  
+  async stopTracking() {
+    try {
+      await chrome.runtime.sendMessage({ action: 'stopTracking' });
+      this.startTime = null;
+      this.timeOnPage.textContent = '-';
+      this.updateUI();
+    } catch (error) {
+      console.error('Error stopping tracking:', error);
+    }
+  }
+}
+
+// Initialize popup manager
+new PopupManager();
+
+// Installation and Development Guide:
+/*
+1. Create a new folder for the extension
+2. Add all the files above to the folder
+3. Add icon files (icon16.png, icon48.png, icon128.png)
+4. Update the API base URL in background.js to your Netlify app URL
+5. Load the extension in Chrome:
+   - Go to chrome://extensions/
+   - Enable "Developer mode"
+   - Click "Load unpacked" and select your extension folder
+6. The extension will automatically track browser activity when enabled
+*/
